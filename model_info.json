@@ -1,0 +1,23 @@
+{
+  "model_terbaik": "Random Forest",
+  "models": {
+    "KNN": {
+      "file": "model_knn.joblib",
+      "recall_cv": 0.603,
+      "recall_uji": 0.519,
+      "precision_uji": 0.609
+    },
+    "Random Forest": {
+      "file": "model_rf.joblib",
+      "recall_cv": 0.757,
+      "recall_uji": 0.722,
+      "precision_uji": 0.591
+    },
+    "Gradient Boosting": {
+      "file": "model_gb.joblib",
+      "recall_cv": 0.71,
+      "recall_uji": 0.815,
+      "precision_uji": 0.603
+    }
+  }
+}
