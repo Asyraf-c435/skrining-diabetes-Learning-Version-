@@ -1,31 +1,57 @@
+import json
+from pathlib import Path
+
 import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-MODEL_PATH = "diabetes_rf.joblib"
+INFO_PATH = Path("model_info.json")
 AMBANG = 0.5   # probabilitas >= ambang -> berisiko diabetes (sama seperti di notebook)
 
 FITUR = ["Pregnancies", "Glucose", "BloodPressure", "SkinThickness",
          "Insulin", "BMI", "DiabetesPedigreeFunction", "Age"]
 ZERO_AS_MISSING = ["Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
 
+PENJELASAN = {
+    "KNN": "Melihat pasien-pasien lama yang paling mirip, lalu mengikuti mayoritas label mereka.",
+    "Random Forest": "Ratusan pohon keputusan menebak terpisah, lalu hasilnya divoting.",
+    "Gradient Boosting": "Pohon dibangun berurutan, tiap pohon memperbaiki kesalahan sebelumnya (dengan early stopping).",
+}
+
 
 @st.cache_resource
-def load_model():
-    return joblib.load(MODEL_PATH)
+def load_semua_model():
+    info = json.loads(INFO_PATH.read_text())
+    models = {nama: joblib.load(d["file"]) for nama, d in info["models"].items()}
+    return info, models
 
 
 st.set_page_config(page_title="Skrining Risiko Diabetes", layout="centered")
-model = load_model()
+info, models = load_semua_model()
+terbaik = info["model_terbaik"]
 
 st.title("Skrining Risiko Diabetes")
 st.caption(
-    "Model Random Forest yang dilatih dengan Pima Indians Diabetes Dataset. "
+    "Tiga model machine learning yang dilatih dengan Pima Indians Diabetes Dataset. "
     "Hasil ini adalah alat bantu skrining awal, **bukan diagnosis medis**. "
     "Keputusan tetap di tangan tenaga kesehatan."
 )
 
+# ---------- pilih model ----------
+daftar = [terbaik] + [n for n in models if n != terbaik]          # model terbaik jadi pilihan pertama
+pilihan = st.radio(
+    "Pilih model",
+    daftar,
+    horizontal=True,
+    format_func=lambda n: f"{n} (terbaik)" if n == terbaik else n,
+)
+d = info["models"][pilihan]
+st.write(f"_{PENJELASAN.get(pilihan, '')}_")
+st.caption(f"Recall cross-validation {d['recall_cv']} · recall data uji {d['recall_uji']} · "
+           f"precision data uji {d['precision_uji']}")
+
+# ---------- input pasien ----------
 with st.form("input_pasien"):
     st.subheader("Data pemeriksaan pasien")
     st.write("Isi **0** untuk Glukosa, Tekanan Darah, Tebal Kulit, Insulin, atau BMI jika tidak diukur.")
@@ -42,6 +68,7 @@ with st.form("input_pasien"):
 
     kirim = st.form_submit_button("Prediksi risiko", type="primary")
 
+# ---------- hasil ----------
 if kirim:
     pasien = pd.DataFrame([{
         "Pregnancies": pregnancies, "Glucose": glucose, "BloodPressure": blood_pressure,
@@ -52,15 +79,29 @@ if kirim:
     tidak_diukur = [c for c in ZERO_AS_MISSING if pasien.at[0, c] == 0]
     pasien[ZERO_AS_MISSING] = pasien[ZERO_AS_MISSING].replace(0, np.nan)   # nol = tidak diukur -> diisi median di pipeline
 
-    prob = float(model.predict_proba(pasien)[0, 1])
+    prob_semua = {nama: float(m.predict_proba(pasien)[0, 1]) for nama, m in models.items()}
+    prob = prob_semua[pilihan]
 
-    st.subheader("Hasil skrining")
+    st.subheader(f"Hasil skrining ({pilihan})")
     if prob >= AMBANG:
-        st.error(f"**Berisiko diabetes.** Disarankan pemeriksaan lanjutan (tes laboratorium).")
+        st.error("**Berisiko diabetes.** Disarankan pemeriksaan lanjutan (tes laboratorium).")
     else:
-        st.success(f"**Risiko rendah** menurut model.")
-    st.metric("Probabilitas diabetes menurut model", f"{prob:.0%}")
+        st.success("**Risiko rendah** menurut model.")
+    st.metric("Probabilitas diabetes", f"{prob:.0%}")
     st.progress(prob)
+
+    st.subheader("Perbandingan ketiga model")
+    tabel = pd.DataFrame({
+        "Model": [f"{n} (terbaik)" if n == terbaik else n for n in prob_semua],
+        "Probabilitas diabetes": [f"{p:.0%}" for p in prob_semua.values()],
+        "Hasil": ["Berisiko" if p >= AMBANG else "Risiko rendah" for p in prob_semua.values()],
+        "Recall data uji": [info["models"][n]["recall_uji"] for n in prob_semua],
+    })
+    st.dataframe(tabel, hide_index=True, width="stretch")
+
+    hasil_set = {p >= AMBANG for p in prob_semua.values()}
+    if len(hasil_set) > 1:
+        st.warning("Ketiga model **tidak sepakat** untuk pasien ini. Sebaiknya tetap diperiksa lebih lanjut.")
 
     if tidak_diukur:
         st.info("Tidak diukur, diisi median data latih: " + ", ".join(tidak_diukur)
